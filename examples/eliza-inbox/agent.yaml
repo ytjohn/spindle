@@ -1,0 +1,48 @@
+agent:
+  id: eliza-inbox
+  name: Eliza (Inbox)
+
+pi:
+  # provider/model are pi's own: any model pi can already use (`pi --list-models`),
+  # or one you define in ~/.pi/agent/models.json. Leave both out to use pi's default.
+  # provider: my-provider
+  # model: my-model
+  thinking_level: off
+
+memory:
+  enabled: true
+  database_path: ./memory.db
+  # Daydream off — this example is about exercising the inbox tool
+  # directly, not the background memory-curation loop. Recall still
+  # works (daydream-off just means no auto-store), so any memories
+  # Eliza explicitly stores remain useful across sessions.
+
+inbox:
+  enabled: true
+  mail_root: ./mail
+  # Short poll for interactive testing — operator drops a fixture .md
+  # file and it shows up within a few seconds.
+  poll_interval_seconds: 5
+  # operator_mail_root defaults to $XDG_DATA_HOME/spindle/operator/mail
+  # — shared with other spindles on the host. For full isolation during
+  # local testing, override:
+  # Share the operator mail root with eliza-alice so unrouted mail from
+  # either spindle lands in one place. Drop the override for isolated
+  # operator mailboxes.
+  operator_mail_root: ~/.local/share/spindle/operator/mail
+  contacts:
+    # Peer: eliza-alice. Adding this entry is what makes
+    # `spindle_inbox(action=send, to="eliza-alice", ...)` write a file
+    # into Alice's mail/inbox/ directly — no HTTP, no shared DB.
+    - agent_id: eliza-alice
+      mail_root: ../eliza-alice/mail
+      display_name: Alice
+      capabilities:
+        - chat
+        - inbox-demo
+
+web:
+  enabled: true
+  bind_host: 0.0.0.0
+  port: 8789
+  token_env: SPINDLE_WEB_TOKEN

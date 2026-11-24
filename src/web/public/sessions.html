@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Sessions</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/">Dashboard</a>
+    <a href="/sessions.html" class="active">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/inbox.html">Inbox</a>
+    <a href="/operator-inbox.html">Operator</a>
+    <a href="/drafts.html">Drafts</a>
+    <a href="/routes.html">Routes</a>
+    <a href="/context.html">Context</a>
+    <a href="/memories.html">Memories</a>
+  </header>
+  <main>
+    <h1>Sessions</h1>
+    <div id="error" class="error" hidden></div>
+
+    <div class="controls">
+      <label style="margin: 0;">
+        <span class="label-text">since</span>
+        <input type="text" id="since" placeholder="2026-04-01T00:00:00Z">
+      </label>
+      <label style="margin: 0;">
+        <span class="label-text">until</span>
+        <input type="text" id="until" placeholder="2026-04-17T00:00:00Z">
+      </label>
+      <label style="margin: 0;">
+        <span class="label-text">min events</span>
+        <input type="number" id="min_events" min="0" style="width: 80px;">
+      </label>
+      <button id="apply" class="primary">Apply</button>
+    </div>
+
+    <div id="list" class="muted">Loading…</div>
+    <div class="pagination" id="pager"></div>
+  </main>
+  <script type="module">
+    import { api, qs } from "/app/api.js";
+    import { escapeHtml, relativeTs } from "/app/format.js";
+    import { renderPagination, readQueryParam, writeQueryParams } from "/app/pagination.js";
+
+    const LIMIT = 50;
+    let offset = Number(readQueryParam("offset", "0")) || 0;
+
+    const errBox = document.getElementById("error");
+    function showError(msg) {
+      errBox.textContent = msg;
+      errBox.hidden = false;
+    }
+
+    document.getElementById("since").value = readQueryParam("since", "");
+    document.getElementById("until").value = readQueryParam("until", "");
+    document.getElementById("min_events").value = readQueryParam("min_events", "");
+
+    async function load() {
+      const since = document.getElementById("since").value.trim();
+      const until = document.getElementById("until").value.trim();
+      const min_events = document.getElementById("min_events").value.trim();
+      writeQueryParams({ since, until, min_events, offset });
+      try {
+        const res = await api.get(
+          "/spindle/sessions" +
+            qs({ limit: LIMIT, offset, since, until, min_events })
+        );
+        const list = document.getElementById("list");
+        if (res.items.length === 0) {
+          list.innerHTML = '<p class="muted">No sessions matched.</p>';
+        } else {
+          list.innerHTML =
+            '<table><thead><tr><th>id</th><th>started</th><th>last activity</th><th>events</th></tr></thead><tbody>' +
+            res.items
+              .map(
+                (s) => `
+              <tr>
+                <td><a href="/session.html?id=${encodeURIComponent(s.id)}" class="mono">${escapeHtml(s.id)}</a></td>
+                <td>${escapeHtml(relativeTs(s.started_at))}</td>
+                <td>${escapeHtml(relativeTs(s.last_activity_at))}</td>
+                <td class="mono">${s.event_count}</td>
+              </tr>`
+              )
+              .join("") +
+            "</tbody></table>";
+        }
+        renderPagination(
+          document.getElementById("pager"),
+          { limit: res.limit, offset: res.offset, total: res.total, hasMore: res.has_more },
+          (newOffset) => {
+            offset = newOffset;
+            load();
+          }
+        );
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    document.getElementById("apply").addEventListener("click", () => {
+      offset = 0;
+      load();
+    });
+
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Session</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/">Dashboard</a>
+    <a href="/sessions.html" class="active">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/inbox.html">Inbox</a>
+    <a href="/operator-inbox.html">Operator</a>
+    <a href="/drafts.html">Drafts</a>
+    <a href="/routes.html">Routes</a>
+    <a href="/context.html">Context</a>
+    <a href="/memories.html">Memories</a>
+  </header>
+  <main>
+    <h1 id="title">Session</h1>
+    <div id="error" class="error" hidden></div>
+
+    <div class="card" id="meta">Loading…</div>
+
+    <h2>Events</h2>
+    <div class="controls">
+      <label style="margin: 0;">
+        <span class="label-text">search (FTS)</span>
+        <input type="search" id="q" placeholder="match text…">
+      </label>
+      <label style="margin: 0;">
+        <span class="label-text">event type</span>
+        <input type="text" id="event_type" placeholder="message,tool_execution_end">
+      </label>
+      <label style="margin: 0;">
+        <span class="label-text">role</span>
+        <input type="text" id="role" placeholder="user,assistant">
+      </label>
+      <button id="apply" class="primary">Apply</button>
+    </div>
+
+    <div id="events" class="event-list muted">Loading…</div>
+    <div class="pagination" id="pager"></div>
+  </main>
+  <script type="module">
+    import { api, qs } from "/app/api.js";
+    import { escapeHtml, formatTs } from "/app/format.js";
+    import { renderPagination, readQueryParam, writeQueryParams } from "/app/pagination.js";
+
+    const LIMIT = 100;
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get("id") ?? "";
+    if (!sessionId) {
+      document.getElementById("error").hidden = false;
+      document.getElementById("error").textContent = "missing ?id= parameter";
+    }
+
+    let offset = Number(readQueryParam("offset", "0")) || 0;
+
+    const errBox = document.getElementById("error");
+    function showError(msg) {
+      errBox.textContent = msg;
+      errBox.hidden = false;
+    }
+
+    document.getElementById("q").value = readQueryParam("q", "");
+    document.getElementById("event_type").value = readQueryParam("event_type", "");
+    document.getElementById("role").value = readQueryParam("role", "");
+
+    async function loadMeta() {
+      try {
+        const s = await api.get(`/spindle/sessions/${encodeURIComponent(sessionId)}`);
+        document.getElementById("title").textContent = `Session ${s.id}`;
+        document.getElementById("meta").innerHTML = `
+          <div><strong>File:</strong> <span class="mono">${escapeHtml(s.file_path)}</span></div>
+          <div><strong>Started:</strong> ${escapeHtml(formatTs(s.started_at))}</div>
+          <div><strong>Last activity:</strong> ${escapeHtml(formatTs(s.last_activity_at))}</div>
+          <div><strong>Events:</strong> <span class="mono">${s.event_count}</span></div>
+          <div><strong>Watermark:</strong> <span class="mono">${s.last_ingested_byte_offset} bytes</span></div>
+          ${s.last_ingest_error ? `<div class="error">Last ingest error: ${escapeHtml(s.last_ingest_error)}</div>` : ""}
+        `;
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    async function loadEvents() {
+      const q = document.getElementById("q").value.trim();
+      const event_type = document.getElementById("event_type").value.trim();
+      const role = document.getElementById("role").value.trim();
+      writeQueryParams({ q, event_type, role, offset });
+      try {
+        // With a q, search across sessions scoped by session_id.
+        // Without q, use the session-scoped events endpoint (seq order).
+        const url = q
+          ? "/spindle/events" +
+            qs({
+              q,
+              session_id: sessionId,
+              event_type,
+              role,
+              limit: LIMIT,
+              offset,
+            })
+          : `/spindle/sessions/${encodeURIComponent(sessionId)}/events` +
+            qs({ event_type, role, limit: LIMIT, offset });
+
+        const res = await api.get(url);
+        const container = document.getElementById("events");
+        if (res.items.length === 0) {
+          container.innerHTML = '<p class="muted">No events matched.</p>';
+        } else {
+          container.innerHTML = res.items
+            .map((e) => {
+              const textOrJson = e.content_text
+                ? escapeHtml(e.content_text)
+                : `<span class="muted">(no text — see raw json)</span>`;
+              return `
+              <div class="event-item">
+                <div class="meta">
+                  <span class="mono">#${e.seq}</span>
+                  ${escapeHtml(e.event_type)}
+                  ${e.role ? `<span class="badge">${escapeHtml(e.role)}</span>` : ""}
+                  ${e.model ? `<span class="badge">${escapeHtml(e.model)}</span>` : ""}
+                  <span class="muted">${escapeHtml(formatTs(e.ts))}</span>
+                </div>
+                <pre>${textOrJson}</pre>
+              </div>`;
+            })
+            .join("");
+        }
+        renderPagination(
+          document.getElementById("pager"),
+          { limit: res.limit, offset: res.offset, total: res.total, hasMore: res.has_more },
+          (newOffset) => {
+            offset = newOffset;
+            loadEvents();
+          }
+        );
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    document.getElementById("apply").addEventListener("click", () => {
+      offset = 0;
+      loadEvents();
+    });
+
+    if (sessionId) {
+      loadMeta();
+      loadEvents();
+    }
+  </script>
+</body>
+</html>

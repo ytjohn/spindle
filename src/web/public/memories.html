@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Memories</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/">Dashboard</a>
+    <a href="/sessions.html">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/inbox.html">Inbox</a>
+    <a href="/operator-inbox.html">Operator</a>
+    <a href="/drafts.html">Drafts</a>
+    <a href="/routes.html">Routes</a>
+    <a href="/memories.html" class="active">Memories</a>
+  </header>
+  <main>
+    <h1>Memories</h1>
+    <div id="error" class="error" hidden></div>
+
+    <div class="controls">
+      <label style="margin: 0; flex: 1;">
+        <span class="label-text">search (FTS)</span>
+        <input type="search" id="q" placeholder="match content…">
+      </label>
+      <label style="margin: 0;">
+        <span class="label-text">kind</span>
+        <select id="kind">
+          <option value="">(any)</option>
+          <option value="episodic">episodic</option>
+          <option value="semantic">semantic</option>
+          <option value="procedural">procedural</option>
+        </select>
+      </label>
+      <label style="margin: 0;">
+        <span class="label-text">&nbsp;</span>
+        <span><input type="checkbox" id="include_tombstoned"> include tombstoned</span>
+      </label>
+      <button id="apply" class="primary">Apply</button>
+      <a href="/memory-new.html" style="margin-left: auto;">
+        <button type="button" class="primary">+ New memory</button>
+      </a>
+    </div>
+
+    <div id="list" class="muted">Loading…</div>
+    <div class="pagination" id="pager"></div>
+  </main>
+  <script type="module">
+    import { api, qs } from "/app/api.js";
+    import { escapeHtml, relativeTs, clip, kindBadge, visibilityBadge, tombstonedBadge } from "/app/format.js";
+    import { renderPagination, readQueryParam, writeQueryParams } from "/app/pagination.js";
+
+    const LIMIT = 50;
+    let offset = Number(readQueryParam("offset", "0")) || 0;
+
+    document.getElementById("q").value = readQueryParam("q", "");
+    document.getElementById("kind").value = readQueryParam("kind", "");
+    document.getElementById("include_tombstoned").checked =
+      readQueryParam("include_tombstoned", "") === "true";
+
+    const errBox = document.getElementById("error");
+    function showError(msg) {
+      errBox.textContent = msg;
+      errBox.hidden = false;
+    }
+
+    async function load() {
+      const q = document.getElementById("q").value.trim();
+      const kind = document.getElementById("kind").value.trim();
+      const include_tombstoned = document.getElementById("include_tombstoned").checked
+        ? "true"
+        : "";
+      writeQueryParams({ q, kind, include_tombstoned, offset });
+      try {
+        const res = await api.get(
+          "/spindle/memories" +
+            qs({ q, kind, include_tombstoned, limit: LIMIT, offset })
+        );
+        const list = document.getElementById("list");
+        if (res.items.length === 0) {
+          list.innerHTML = '<p class="muted">No memories matched.</p>';
+        } else {
+          list.innerHTML =
+            '<table><thead><tr><th style="width:90px">id</th><th>content</th><th style="width:120px">kind / vis</th><th style="width:120px">last recalled</th><th style="width:100px">recalls</th><th style="width:200px">actions</th></tr></thead><tbody>' +
+            res.items
+              .map(
+                (m) => `
+              <tr>
+                <td class="mono"><a href="/memory.html?id=${m.id}">#${m.id}</a></td>
+                <td>${escapeHtml(clip(m.content, 200))}</td>
+                <td>${kindBadge(m.kind)} ${visibilityBadge(m.visibility)} ${tombstonedBadge(m.tombstoned_at)}</td>
+                <td>${escapeHtml(relativeTs(m.last_recalled_at))}</td>
+                <td class="mono">${m.recall_count}</td>
+                <td class="actions">
+                  <a href="/memory.html?id=${m.id}"><button type="button">view</button></a>
+                  ${
+                    m.tombstoned_at
+                      ? `<button type="button" class="primary" data-restore="${m.id}">restore</button>`
+                      : `<button type="button" class="danger" data-delete="${m.id}">delete</button>`
+                  }
+                </td>
+              </tr>`
+              )
+              .join("") +
+            "</tbody></table>";
+          for (const btn of list.querySelectorAll("[data-delete]")) {
+            btn.addEventListener("click", async () => {
+              if (!confirm(`Tombstone memory #${btn.dataset.delete}?`)) return;
+              try {
+                await api.del(`/spindle/memories/${btn.dataset.delete}?reason=operator:web-ui`);
+                load();
+              } catch (err) {
+                showError(err.message);
+              }
+            });
+          }
+          for (const btn of list.querySelectorAll("[data-restore]")) {
+            btn.addEventListener("click", async () => {
+              try {
+                await api.post(`/spindle/memories/${btn.dataset.restore}/restore`);
+                load();
+              } catch (err) {
+                showError(err.message);
+              }
+            });
+          }
+        }
+        renderPagination(
+          document.getElementById("pager"),
+          { limit: res.limit, offset: res.offset, total: res.total, hasMore: res.has_more },
+          (newOffset) => {
+            offset = newOffset;
+            load();
+          }
+        );
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    document.getElementById("apply").addEventListener("click", () => {
+      offset = 0;
+      load();
+    });
+
+    load();
+  </script>
+</body>
+</html>

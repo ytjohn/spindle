@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/" class="active">Dashboard</a>
+    <a href="/sessions.html">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/inbox.html">Inbox</a>
+    <a href="/operator-inbox.html">Operator</a>
+    <a href="/drafts.html">Drafts</a>
+    <a href="/routes.html">Routes</a>
+    <a href="/context.html">Context</a>
+    <a href="/memories.html">Memories</a>
+  </header>
+  <main>
+    <h1 id="title">Loading…</h1>
+    <div id="error" class="error" hidden></div>
+
+    <div class="stat-grid" id="stats"></div>
+
+    <div id="registered-agents" hidden>
+      <h2>Registered Agents</h2>
+      <div id="agent-list"></div>
+    </div>
+
+    <h2>Inbox <a href="/inbox.html" style="font-size: 0.7em; font-weight: normal;">view all →</a></h2>
+    <div id="recent-inbox" class="muted">Loading…</div>
+
+    <div id="context-section" hidden>
+      <h2>Context <a href="/context.html" style="font-size: 0.7em; font-weight: normal;">view all →</a></h2>
+      <div id="recent-context" class="muted">Loading…</div>
+    </div>
+
+    <h2>Recent sessions</h2>
+    <div id="recent-sessions" class="muted">Loading…</div>
+
+    <h2>Recent memories</h2>
+    <div id="recent-memories" class="muted">Loading…</div>
+  </main>
+  <script type="module">
+    import { api } from "/app/api.js";
+    import {
+      relativeTs,
+      escapeHtml,
+      clip,
+      kindBadge,
+      tombstonedBadge,
+      priorityBadge,
+      inboxStatusBadge,
+      compactTriggerBadge,
+      contextBar,
+    } from "/app/format.js";
+
+    const errBox = document.getElementById("error");
+    function showError(msg) {
+      errBox.textContent = msg;
+      errBox.hidden = false;
+    }
+
+    try {
+      const info = await api.get("/spindle/info");
+      document.getElementById("title").textContent =
+        info.agent_name ? `${info.agent_name} (${info.agent_id})` : info.agent_id;
+      document.title = `Spindle — ${info.agent_name ?? info.agent_id}`;
+
+      const sessions = await api.get("/spindle/sessions?limit=5");
+      const activeMem = await api.get("/spindle/memories?limit=5");
+      const tombedMem = await api.get("/spindle/memories?include_tombstoned=true&limit=1&offset=0");
+      const tombTotal = Math.max(0, tombedMem.total - activeMem.total);
+
+      let inboxStatus = null;
+      let inboxItems = [];
+      let operatorStatus = null;
+      if (info.inbox_enabled) {
+        try {
+          inboxStatus = await api.get("/spindle/inbox/status");
+          const recentInbox = await api.get("/spindle/inbox?status=all&limit=5");
+          inboxItems = recentInbox.items;
+        } catch { /* show empty summary below */ }
+        try {
+          operatorStatus = await api.get("/spindle/operator-inbox/status");
+        } catch { /* non-fatal */ }
+      }
+
+      let contextCurrent = null;
+      let compactTotal = 0;
+      if (info.telemetry_enabled) {
+        try {
+          contextCurrent = await api.get("/spindle/context/current");
+        } catch { /* non-fatal */ }
+        try {
+          const ce = await api.get("/spindle/context/compact-events?limit=1");
+          compactTotal = ce.total ?? 0;
+        } catch { /* non-fatal */ }
+      }
+
+      const stats = document.getElementById("stats");
+      const ctxPct = contextCurrent?.live?.percent ?? contextCurrent?.latest?.context_percent ?? null;
+      const statFields = [
+        { label: "Sessions", value: sessions.total },
+        {
+          label: "Total events",
+          value: sessions.items.reduce((sum, s) => sum + (s.event_count ?? 0), 0),
+        },
+        { label: "Memories (active)", value: activeMem.total },
+        { label: "Memories (tombstoned)", value: tombTotal },
+        { label: "Memory enabled", value: info.memory_enabled ? "yes" : "no" },
+        { label: "Daydream", value: info.daydream_enabled ? "on" : "off" },
+        ...(info.telemetry_enabled ? [
+          {
+            label: "Context",
+            value: ctxPct !== null ? ctxPct.toFixed(1) + "%" : "—",
+          },
+          { label: "Compacts", value: compactTotal },
+        ] : []),
+        {
+          label: "Inbox unread",
+          value: info.inbox_enabled
+            ? (inboxStatus ? inboxStatus.unread_count : "?")
+            : "off",
+        },
+        {
+          label: "Operator unread",
+          value: info.inbox_enabled
+            ? (operatorStatus ? operatorStatus.unread_count : "?")
+            : "off",
+        },
+        {
+          label: "Routes",
+          value: info.inbox_enabled ? (info.inbox_route_count ?? "?") : "—",
+        },
+      ];
+      stats.innerHTML = statFields
+        .map(
+          (s) => `
+        <div class="stat">
+          <div class="label">${escapeHtml(s.label)}</div>
+          <div class="value">${escapeHtml(s.value)}</div>
+        </div>`
+        )
+        .join("");
+
+      const inboxDiv = document.getElementById("recent-inbox");
+      if (!info.inbox_enabled) {
+        inboxDiv.innerHTML = '<p class="muted">Inbox disabled — set <span class="mono">inbox.enabled: true</span> in agent.yaml to turn it on.</p>';
+      } else if (inboxItems.length === 0) {
+        inboxDiv.innerHTML = '<p class="muted">No inbox messages yet.</p>';
+      } else {
+        inboxDiv.innerHTML =
+          '<table><thead><tr><th>from</th><th>subject</th><th style="width:140px">flags</th><th style="width:120px">received</th></tr></thead><tbody>' +
+          inboxItems
+            .map((m) => `
+              <tr>
+                <td><strong>${escapeHtml(m.from)}</strong></td>
+                <td><a href="/inbox-message.html?id=${encodeURIComponent(m.id)}">${escapeHtml(m.subject ?? "(no subject)")}</a></td>
+                <td>${inboxStatusBadge(m.status)} ${priorityBadge(m.priority)}</td>
+                <td>${escapeHtml(relativeTs(m.date_ms))}</td>
+              </tr>`)
+            .join("") +
+          "</tbody></table>";
+      }
+
+      const agentsDiv = document.getElementById("registered-agents");
+      const agentList = document.getElementById("agent-list");
+      if (info.registered_agents && info.registered_agents.length > 0) {
+        agentsDiv.hidden = false;
+        agentList.innerHTML = info.registered_agents
+          .map((a) => `
+            <div class="stat" style="display:inline-block; margin: 0.25rem 0.5rem 0.25rem 0; vertical-align:top;">
+              <a href="${escapeHtml(a.path)}" style="font-weight:bold">${escapeHtml(a.title)}</a>
+              ${a.description ? `<div class="label">${escapeHtml(a.description)}</div>` : ""}
+            </div>`)
+          .join("");
+      }
+
+      // Context section — last 5 turns + any recent compacts
+      if (info.telemetry_enabled) {
+        document.getElementById("context-section").hidden = false;
+        const ctxDiv = document.getElementById("recent-context");
+        try {
+          const recentStats = await api.get("/spindle/context/stats?limit=5");
+          const recentCompacts = await api.get("/spindle/context/compact-events?limit=3");
+          if (recentStats.items.length === 0) {
+            ctxDiv.innerHTML = '<p class="muted">No turns recorded yet.</p>';
+          } else {
+            ctxDiv.innerHTML =
+              '<table><thead><tr><th>#</th><th>recorded</th><th>context</th><th>ctx tokens</th><th>latency</th><th>compact</th></tr></thead><tbody>' +
+              recentStats.items.map((r) => `
+                <tr>
+                  <td class="mono">${escapeHtml(String(r.turn_index))}</td>
+                  <td>${escapeHtml(relativeTs(r.recorded_at))}</td>
+                  <td>${r.context_percent !== null ? contextBar(r.context_percent) : '<span class="muted">—</span>'}</td>
+                  <td class="mono" style="font-size:0.85em">${r.context_tokens !== null ? r.context_tokens.toLocaleString() : "—"}</td>
+                  <td class="mono">${r.ms_since_prompt !== null ? (r.ms_since_prompt < 1000 ? r.ms_since_prompt + "ms" : (r.ms_since_prompt/1000).toFixed(1) + "s") : "—"}</td>
+                  <td>${r.compacted_this_turn ? compactTriggerBadge(r.compact_trigger) : '<span class="muted">—</span>'}</td>
+                </tr>`).join("") +
+              '</tbody></table>';
+            if (recentCompacts.items.length > 0) {
+              ctxDiv.innerHTML += '<h3 style="margin:16px 0 8px">Recent compactions</h3>' +
+                '<table><thead><tr><th>trigger</th><th>when</th><th>before</th><th>after</th><th>reduction</th></tr></thead><tbody>' +
+                recentCompacts.items.map((e) => {
+                  const red = (e.tokens_before && e.tokens_after)
+                    ? ((1 - e.tokens_after / e.tokens_before) * 100).toFixed(1) + "%"
+                    : "—";
+                  return `<tr>
+                    <td>${compactTriggerBadge(e.trigger)}</td>
+                    <td>${escapeHtml(relativeTs(e.started_at))}</td>
+                    <td class="mono">${e.tokens_before !== null ? e.tokens_before.toLocaleString() : "—"}</td>
+                    <td class="mono">${e.tokens_after !== null ? e.tokens_after.toLocaleString() : "—"}</td>
+                    <td class="mono">${escapeHtml(red)}</td>
+                  </tr>`;
+                }).join("") +
+                '</tbody></table>';
+            }
+          }
+        } catch (e) {
+          ctxDiv.innerHTML = `<p class="muted">Context data unavailable: ${escapeHtml(e.message)}</p>`;
+        }
+      }
+
+      const recent = document.getElementById("recent-sessions");
+      if (sessions.items.length === 0) {
+        recent.innerHTML = '<p class="muted">No sessions yet.</p>';
+      } else {
+        recent.innerHTML =
+          '<table><thead><tr><th>id</th><th>last activity</th><th>events</th></tr></thead><tbody>' +
+          sessions.items
+            .map(
+              (s) => `
+            <tr>
+              <td><a href="/session.html?id=${encodeURIComponent(s.id)}" class="mono">${escapeHtml(s.id)}</a></td>
+              <td>${escapeHtml(relativeTs(s.last_activity_at))}</td>
+              <td class="mono">${s.event_count}</td>
+            </tr>`
+            )
+            .join("") +
+          "</tbody></table>";
+      }
+
+      const memDiv = document.getElementById("recent-memories");
+      if (activeMem.items.length === 0) {
+        memDiv.innerHTML = '<p class="muted">No memories yet.</p>';
+      } else {
+        memDiv.innerHTML =
+          '<table><thead><tr><th>kind</th><th>content</th><th>created</th></tr></thead><tbody>' +
+          activeMem.items
+            .map(
+              (m) => `
+            <tr>
+              <td>${kindBadge(m.kind)} ${tombstonedBadge(m.tombstoned_at)}</td>
+              <td><a href="/memory.html?id=${m.id}">${escapeHtml(clip(m.content, 120))}</a></td>
+              <td>${escapeHtml(relativeTs(m.created_at))}</td>
+            </tr>`
+            )
+            .join("") +
+          "</tbody></table>";
+      }
+    } catch (err) {
+      showError(err.message);
+    }
+  </script>
+</body>
+</html>

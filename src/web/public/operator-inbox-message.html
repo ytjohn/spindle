@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Operator message</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/">Dashboard</a>
+    <a href="/sessions.html">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/inbox.html">Inbox</a>
+    <a href="/operator-inbox.html" class="active">Operator</a>
+    <a href="/drafts.html">Drafts</a>
+    <a href="/routes.html">Routes</a>
+    <a href="/context.html">Context</a>
+    <a href="/memories.html">Memories</a>
+  </header>
+  <main>
+    <h1 id="title">Operator message</h1>
+    <div id="error" class="error" hidden></div>
+    <div id="success" class="success" hidden></div>
+
+    <div class="card" id="meta">Loading…</div>
+
+    <h2>Body</h2>
+    <div class="message-body" id="body"></div>
+
+    <h2>Attachments</h2>
+    <div id="attachments" class="muted">—</div>
+
+    <h2>Actions</h2>
+    <div class="hstack">
+      <a href="/operator-inbox.html"><button type="button">← back</button></a>
+      <button type="button" id="reply-btn" class="primary">Reply (or redeliver)</button>
+      <button type="button" id="read-btn" hidden>Mark read</button>
+      <button type="button" id="unread-btn" hidden>Mark unread</button>
+      <button type="button" id="delete-btn" class="danger" hidden>Tombstone</button>
+      <button type="button" id="restore-btn" class="primary" hidden>Restore</button>
+    </div>
+  </main>
+  <script type="module">
+    import { api, getToken } from "/app/api.js";
+    import {
+      escapeHtml,
+      formatTs,
+      relativeTs,
+      priorityBadge,
+      inboxStatusBadge,
+      formatBytes,
+    } from "/app/format.js";
+
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("id");
+
+    const errBox = document.getElementById("error");
+    const okBox = document.getElementById("success");
+    function showError(msg) { errBox.textContent = msg; errBox.hidden = false; okBox.hidden = true; }
+    function showOk(msg) { okBox.textContent = msg; okBox.hidden = false; errBox.hidden = true; }
+
+    if (!id) showError("missing ?id= parameter");
+
+    async function downloadAttachment(filename) {
+      const token = getToken();
+      if (!token) { showError("no auth token"); return; }
+      try {
+        const res = await fetch(
+          `/spindle/operator-inbox/${encodeURIComponent(id)}/attachments/${encodeURIComponent(filename)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (err) {
+        showError(`attachment ${filename}: ${err.message}`);
+      }
+    }
+
+    async function load() {
+      try {
+        const m = await api.get(`/spindle/operator-inbox/${encodeURIComponent(id)}`);
+        document.title = `Spindle — ${m.subject ?? m.id}`;
+        document.getElementById("title").textContent = m.subject ?? m.id;
+        document.getElementById("meta").innerHTML = `
+          <div>${inboxStatusBadge(m.status)} ${priorityBadge(m.priority)}</div>
+          <div><strong>From:</strong> ${escapeHtml(m.from)}
+               <span class="muted mono" style="font-size: 0.8em;">(auth: ${escapeHtml(m.from_auth)})</span></div>
+          ${
+            m.original_recipient
+              ? `<div><strong>Intended recipient:</strong> <span class="mono">${escapeHtml(m.original_recipient)}</span> <span class="muted">(unrouted — fell through to operator)</span></div>`
+              : m.to
+                ? `<div><strong>To:</strong> <span class="mono">${escapeHtml(m.to)}</span></div>`
+                : ""
+          }
+          ${m.subject ? `<div><strong>Subject:</strong> ${escapeHtml(m.subject)}</div>` : ""}
+          <div><strong>Date:</strong> ${escapeHtml(formatTs(m.date_ms))} (${escapeHtml(relativeTs(m.date_ms))})</div>
+          <div><strong>Kind:</strong> <span class="mono">${escapeHtml(m.kind)}</span></div>
+          ${m.thread_id ? `<div><strong>Thread:</strong> <span class="mono">${escapeHtml(m.thread_id)}</span></div>` : ""}
+          ${m.in_reply_to ? `<div><strong>In-Reply-To:</strong> <span class="mono">${escapeHtml(m.in_reply_to)}</span></div>` : ""}
+          <div><strong>id:</strong> <span class="mono">${escapeHtml(m.id)}</span></div>
+          <div><strong>file:</strong> <span class="mono">${escapeHtml(m.rel_path)}</span></div>
+          ${
+            m.metadata
+              ? `<details><summary>metadata</summary><pre>${escapeHtml(JSON.stringify(m.metadata, null, 2))}</pre></details>`
+              : ""
+          }
+        `;
+        document.getElementById("body").textContent = m.body ?? "";
+
+        const att = document.getElementById("attachments");
+        if (!m.attachments || m.attachments.length === 0) {
+          att.innerHTML = '<p class="muted">none</p>';
+        } else {
+          att.innerHTML = m.attachments.map((a) => `
+            <a class="attachment-link" data-filename="${escapeHtml(a.filename)}">
+              📎 ${escapeHtml(a.filename)}
+              <span class="muted">(${escapeHtml(a.content_type ?? "?")}, ${formatBytes(a.size_bytes)})</span>
+            </a>
+          `).join("");
+          for (const link of att.querySelectorAll("[data-filename]")) {
+            link.addEventListener("click", (e) => {
+              e.preventDefault();
+              downloadAttachment(link.dataset.filename);
+            });
+          }
+        }
+
+        document.getElementById("read-btn").hidden = m.status !== "unread";
+        document.getElementById("unread-btn").hidden = m.status !== "read";
+        document.getElementById("delete-btn").hidden = m.status === "tombstoned";
+        document.getElementById("restore-btn").hidden = m.status !== "tombstoned";
+
+        // Reply/redeliver hands off to the compose page. For unrouted
+        // messages we prefill 'to' with the original intended recipient
+        // so the operator can resend once the route exists. For
+        // addressed-to-operator messages we prefill the sender.
+        document.getElementById("reply-btn").onclick = () => {
+          const url = new URL("/compose.html", window.location.origin);
+          if (m.original_recipient) {
+            url.searchParams.set("to", m.original_recipient);
+            url.searchParams.set("subject", m.subject ?? "");
+            url.searchParams.set("body", m.body ?? "");
+          } else {
+            const authMatch = /^agent:(.+)$/.exec(m.from_auth ?? "");
+            url.searchParams.set("to", authMatch ? authMatch[1] : m.from);
+            url.searchParams.set(
+              "subject",
+              (m.subject ?? "").startsWith("re:") ? m.subject : `re: ${m.subject ?? ""}`
+            );
+            url.searchParams.set("in_reply_to", m.id);
+          }
+          window.location.href = url.toString();
+        };
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    document.getElementById("read-btn").addEventListener("click", async () => {
+      try { await api.post(`/spindle/operator-inbox/${encodeURIComponent(id)}/read`); showOk("Marked read."); load(); }
+      catch (err) { showError(err.message); }
+    });
+    document.getElementById("unread-btn").addEventListener("click", async () => {
+      try { await api.post(`/spindle/operator-inbox/${encodeURIComponent(id)}/unread`); showOk("Marked unread."); load(); }
+      catch (err) { showError(err.message); }
+    });
+    document.getElementById("delete-btn").addEventListener("click", async () => {
+      if (!confirm("Tombstone this message?")) return;
+      try { await api.del(`/spindle/operator-inbox/${encodeURIComponent(id)}`); showOk("Tombstoned."); load(); }
+      catch (err) { showError(err.message); }
+    });
+    document.getElementById("restore-btn").addEventListener("click", async () => {
+      try { await api.post(`/spindle/operator-inbox/${encodeURIComponent(id)}/restore`); showOk("Restored."); load(); }
+      catch (err) { showError(err.message); }
+    });
+
+    if (id) load();
+  </script>
+</body>
+</html>

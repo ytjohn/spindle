@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Operator Inbox</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/">Dashboard</a>
+    <a href="/sessions.html">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/inbox.html">Inbox</a>
+    <a href="/operator-inbox.html" class="active">Operator</a>
+    <a href="/drafts.html">Drafts</a>
+    <a href="/routes.html">Routes</a>
+    <a href="/context.html">Context</a>
+    <a href="/memories.html">Memories</a>
+  </header>
+  <main>
+    <h1>Operator Inbox</h1>
+    <p class="muted">
+      Messages addressed to the <span class="mono">operator</span> agent
+      or unrouted (sender's spindle had no route for the recipient). This
+      mailbox is shared across spindles on the host via
+      <span class="mono" id="op-root">…</span> — no DB projection, files are
+      read fresh on every request.
+    </p>
+    <div id="error" class="error" hidden></div>
+
+    <div class="tabs">
+      <a href="#unread" data-status="unread" class="active">Unread</a>
+      <a href="#read" data-status="read">Read</a>
+      <a href="#tombstoned" data-status="tombstoned">Tombstoned</a>
+      <a href="#all" data-status="all">All</a>
+    </div>
+
+    <div id="list" class="muted">Loading…</div>
+    <div class="pagination" id="pager"></div>
+  </main>
+  <script type="module">
+    import { api, qs } from "/app/api.js";
+    import {
+      escapeHtml,
+      relativeTs,
+      clip,
+      priorityBadge,
+      inboxStatusBadge,
+    } from "/app/format.js";
+    import { renderPagination, readQueryParam, writeQueryParams } from "/app/pagination.js";
+
+    const LIMIT = 50;
+    let offset = Number(readQueryParam("offset", "0")) || 0;
+    let currentStatus = readQueryParam("status", "unread");
+    const validStatuses = new Set(["unread", "read", "tombstoned", "all"]);
+    if (!validStatuses.has(currentStatus)) currentStatus = "unread";
+
+    const errBox = document.getElementById("error");
+    function showError(msg) { errBox.textContent = msg; errBox.hidden = false; }
+
+    function setActiveTab() {
+      for (const tab of document.querySelectorAll(".tabs a[data-status]")) {
+        tab.classList.toggle("active", tab.dataset.status === currentStatus);
+      }
+    }
+
+    try {
+      const info = await api.get("/spindle/info");
+      document.getElementById("op-root").textContent =
+        info.inbox_operator_mail_root ?? "(operator mail root unknown)";
+    } catch { /* non-fatal */ }
+
+    async function load() {
+      writeQueryParams({ status: currentStatus, offset });
+      setActiveTab();
+      try {
+        const res = await api.get(
+          "/spindle/operator-inbox" + qs({ status: currentStatus, limit: LIMIT, offset })
+        );
+        const list = document.getElementById("list");
+        if (res.items.length === 0) {
+          list.innerHTML = `<p class="muted">No ${currentStatus} messages in the operator inbox.</p>`;
+        } else {
+          list.innerHTML =
+            '<table><thead><tr><th>from</th><th>subject</th><th style="width:200px">id / flags</th><th style="width:140px">received</th><th style="width:160px">actions</th></tr></thead><tbody>' +
+            res.items
+              .map((m) => `
+                <tr>
+                  <td>
+                    <strong>${escapeHtml(m.from)}</strong>
+                    <div class="muted mono" style="font-size: 0.75em;">${escapeHtml(m.from_auth)}</div>
+                    ${
+                      m.original_recipient
+                        ? `<div class="muted">unrouted → <span class="mono">${escapeHtml(m.original_recipient)}</span></div>`
+                        : ""
+                    }
+                  </td>
+                  <td>
+                    <a href="/operator-inbox-message.html?id=${encodeURIComponent(m.id)}">
+                      ${escapeHtml(m.subject ?? "(no subject)")}
+                    </a>
+                    <div class="muted">${escapeHtml(clip(m.body, 120))}</div>
+                  </td>
+                  <td>
+                    <div class="mono" style="font-size: 0.75em;">${escapeHtml(m.id)}</div>
+                    <div>${inboxStatusBadge(m.status)} ${priorityBadge(m.priority)}</div>
+                  </td>
+                  <td>${escapeHtml(relativeTs(m.date_ms))}</td>
+                  <td class="actions">
+                    <a href="/operator-inbox-message.html?id=${encodeURIComponent(m.id)}">
+                      <button type="button">open</button>
+                    </a>
+                    ${
+                      m.status === "unread"
+                        ? `<button type="button" data-read="${encodeURIComponent(m.id)}">read</button>`
+                        : m.status === "read"
+                          ? `<button type="button" data-unread="${encodeURIComponent(m.id)}">unread</button>`
+                          : ""
+                    }
+                    ${
+                      m.status === "tombstoned"
+                        ? `<button type="button" class="primary" data-restore="${encodeURIComponent(m.id)}">restore</button>`
+                        : `<button type="button" class="danger" data-delete="${encodeURIComponent(m.id)}">del</button>`
+                    }
+                  </td>
+                </tr>`)
+              .join("") +
+            "</tbody></table>";
+
+          for (const btn of list.querySelectorAll("[data-read]")) {
+            btn.addEventListener("click", async () => {
+              try { await api.post(`/spindle/operator-inbox/${btn.dataset.read}/read`); load(); }
+              catch (err) { showError(err.message); }
+            });
+          }
+          for (const btn of list.querySelectorAll("[data-unread]")) {
+            btn.addEventListener("click", async () => {
+              try { await api.post(`/spindle/operator-inbox/${btn.dataset.unread}/unread`); load(); }
+              catch (err) { showError(err.message); }
+            });
+          }
+          for (const btn of list.querySelectorAll("[data-delete]")) {
+            btn.addEventListener("click", async () => {
+              if (!confirm(`Tombstone ${btn.dataset.delete}?`)) return;
+              try { await api.del(`/spindle/operator-inbox/${btn.dataset.delete}`); load(); }
+              catch (err) { showError(err.message); }
+            });
+          }
+          for (const btn of list.querySelectorAll("[data-restore]")) {
+            btn.addEventListener("click", async () => {
+              try { await api.post(`/spindle/operator-inbox/${btn.dataset.restore}/restore`); load(); }
+              catch (err) { showError(err.message); }
+            });
+          }
+        }
+        renderPagination(
+          document.getElementById("pager"),
+          { limit: res.limit, offset: res.offset, total: res.total, hasMore: res.has_more },
+          (newOffset) => { offset = newOffset; load(); }
+        );
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    for (const tab of document.querySelectorAll(".tabs a[data-status]")) {
+      tab.addEventListener("click", (e) => {
+        e.preventDefault();
+        currentStatus = tab.dataset.status;
+        offset = 0;
+        load();
+      });
+    }
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+diff --git a/dist/utils/retry.js b/dist/utils/retry.js
+index 65c7c9efd7667445b711fcd43549062ee3eb5ecf..6d5c66bd1c6264e606349c17ea20313e6834a5a9 100644
+--- a/dist/utils/retry.js
++++ b/dist/utils/retry.js
+@@ -64,6 +64,12 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
+     "stream ended before message_stop",
+     "stream ended before a terminal response event",
+     "http2 request did not get a response",
++    // LOCAL PATCH (spindle): the OpenAI SDK's
++    // default message when an SSE stream carries an error event with no detail
++    // ("An error occurred during streaming"). OpenRouter and other
++    // OpenAI-compatible gateways produce it on mid-response drops, and
++    // without this entry such a drop ends the run without a single retry.
++    "error occurred during streaming",
+     // Provider-requested retry delay cap failures should flow through the outer
+     // retry policy so callers can surface/abort the backoff (#1123).
+     "retry delay",

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Routes</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/">Dashboard</a>
+    <a href="/sessions.html">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/inbox.html">Inbox</a>
+    <a href="/operator-inbox.html">Operator</a>
+    <a href="/drafts.html">Drafts</a>
+    <a href="/routes.html" class="active">Routes</a>
+    <a href="/context.html">Context</a>
+    <a href="/memories.html">Memories</a>
+  </header>
+  <main>
+    <h1>Agent routes</h1>
+    <p class="muted">
+      Which agents this spindle can deliver to. <span class="mono">self</span> /
+      <span class="mono">operator</span> / this agent's id are reserved and cannot be deleted.
+      A send to an agent_id that isn't listed falls through to the operator inbox.
+    </p>
+    <div id="error" class="error" hidden></div>
+    <div id="success" class="success" hidden></div>
+
+    <div id="list" class="muted">Loading…</div>
+
+    <h2>Add / update a route</h2>
+    <form id="route-form">
+      <div class="hstack">
+        <label style="margin: 0; flex: 1;">
+          <span class="label-text">agent_id</span>
+          <input type="text" id="agent_id" required placeholder="e.g. jane">
+        </label>
+        <label style="margin: 0; flex: 2;">
+          <span class="label-text">mail_root (absolute or ~/ path)</span>
+          <input type="text" id="mail_root" required placeholder="/path/to/agent/.pi/mail">
+        </label>
+      </div>
+      <div class="hstack">
+        <label style="margin: 0; flex: 1;">
+          <span class="label-text">display_name</span>
+          <input type="text" id="display_name" required>
+        </label>
+        <label style="margin: 0; flex: 2;">
+          <span class="label-text">capabilities (comma-separated)</span>
+          <input type="text" id="capabilities" placeholder="chat, tasks, status">
+        </label>
+      </div>
+      <button type="submit" class="primary">Save route</button>
+    </form>
+  </main>
+  <script type="module">
+    import { api } from "/app/api.js";
+    import { escapeHtml, formatTs, relativeTs } from "/app/format.js";
+
+    const errBox = document.getElementById("error");
+    const okBox = document.getElementById("success");
+    function showError(msg) { errBox.textContent = msg; errBox.hidden = false; okBox.hidden = true; }
+    function showOk(msg) { okBox.textContent = msg; okBox.hidden = false; errBox.hidden = true; }
+
+    const RESERVED = new Set(["self", "operator"]);
+
+    let ownerAgentId = null;
+    try {
+      const info = await api.get("/spindle/info");
+      ownerAgentId = info.agent_id;
+    } catch { /* non-fatal */ }
+
+    async function load() {
+      try {
+        const res = await api.get("/spindle/routes");
+        const list = document.getElementById("list");
+        if (res.items.length === 0) {
+          list.innerHTML = '<p class="muted">No routes configured.</p>';
+          return;
+        }
+        list.innerHTML =
+          '<table><thead><tr><th>agent_id</th><th>display</th><th>mail_root</th><th>capabilities</th><th style="width:140px">last seen</th><th style="width:100px">source</th><th style="width:160px">actions</th></tr></thead><tbody>' +
+          res.items
+            .map((r) => {
+              const isReserved =
+                RESERVED.has(r.agent_id) || r.agent_id === ownerAgentId;
+              return `
+                <tr>
+                  <td>
+                    <span class="mono">${escapeHtml(r.agent_id)}</span>
+                    ${isReserved ? '<span class="badge">reserved</span>' : ""}
+                  </td>
+                  <td>${escapeHtml(r.display_name)}</td>
+                  <td class="mono" style="font-size: 0.8em;">${escapeHtml(r.mail_root)}</td>
+                  <td class="mono">${(r.capabilities ?? []).join(", ")}</td>
+                  <td>${r.last_seen_at ? escapeHtml(relativeTs(r.last_seen_at)) : '<span class="muted">—</span>'}</td>
+                  <td class="mono">${escapeHtml(r.created_by)}</td>
+                  <td class="actions">
+                    <button type="button" data-edit='${JSON.stringify({
+                      agent_id: r.agent_id,
+                      display_name: r.display_name,
+                      mail_root: r.mail_root,
+                      capabilities: r.capabilities ?? [],
+                    }).replace(/'/g, "&#39;")}'>edit</button>
+                    ${isReserved ? "" : `<button type="button" class="danger" data-delete="${encodeURIComponent(r.agent_id)}">del</button>`}
+                  </td>
+                </tr>`;
+            })
+            .join("") +
+          "</tbody></table>";
+
+        for (const btn of list.querySelectorAll("[data-edit]")) {
+          btn.addEventListener("click", () => {
+            const r = JSON.parse(btn.dataset.edit);
+            document.getElementById("agent_id").value = r.agent_id;
+            document.getElementById("mail_root").value = r.mail_root;
+            document.getElementById("display_name").value = r.display_name;
+            document.getElementById("capabilities").value = (r.capabilities ?? []).join(", ");
+            window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+          });
+        }
+        for (const btn of list.querySelectorAll("[data-delete]")) {
+          btn.addEventListener("click", async () => {
+            if (!confirm(`Delete route ${btn.dataset.delete}?`)) return;
+            try {
+              await api.del(`/spindle/routes/${btn.dataset.delete}`);
+              showOk(`Deleted ${btn.dataset.delete}.`);
+              load();
+            } catch (err) {
+              showError(err.message);
+            }
+          });
+        }
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    document.getElementById("route-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const agent_id = document.getElementById("agent_id").value.trim();
+      const mail_root = document.getElementById("mail_root").value.trim();
+      const display_name = document.getElementById("display_name").value.trim();
+      const capsRaw = document.getElementById("capabilities").value.trim();
+      const capabilities = capsRaw ? capsRaw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+      try {
+        // POST is upsert in the engine; use it for both create and update.
+        await api.post("/spindle/routes", {
+          agent_id,
+          mail_root,
+          display_name,
+          capabilities,
+        });
+        showOk(`Saved route ${agent_id}.`);
+        document.getElementById("route-form").reset();
+        load();
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>

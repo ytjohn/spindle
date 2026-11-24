@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Drafts</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/">Dashboard</a>
+    <a href="/sessions.html">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/inbox.html">Inbox</a>
+    <a href="/operator-inbox.html">Operator</a>
+    <a href="/drafts.html" class="active">Drafts</a>
+    <a href="/routes.html">Routes</a>
+    <a href="/context.html">Context</a>
+    <a href="/memories.html">Memories</a>
+  </header>
+  <main>
+    <h1>Drafts</h1>
+    <p class="muted">Saved but not yet sent. Each row is a markdown file under <span class="mono">mail/drafts/</span>.</p>
+    <div id="error" class="error" hidden></div>
+
+    <div class="tabs">
+      <a href="#all" id="tab-all" data-status="" class="active">All</a>
+      <a href="#draft" id="tab-draft" data-status="draft">Draft</a>
+      <a href="#ready" id="tab-ready" data-status="ready">Ready</a>
+      <span style="margin-left: auto;"></span>
+      <a href="/compose.html"><button type="button" class="primary">+ New draft</button></a>
+      <a href="/outbox.html"><button type="button">Outbox</button></a>
+    </div>
+
+    <div id="list" class="muted">Loading…</div>
+    <div class="pagination" id="pager"></div>
+  </main>
+  <script type="module">
+    import { api, qs } from "/app/api.js";
+    import { escapeHtml, relativeTs, clip } from "/app/format.js";
+    import { renderPagination, readQueryParam, writeQueryParams } from "/app/pagination.js";
+
+    const LIMIT = 50;
+    let offset = Number(readQueryParam("offset", "0")) || 0;
+    let currentStatus = readQueryParam("status", "");
+
+    const errBox = document.getElementById("error");
+    function showError(msg) { errBox.textContent = msg; errBox.hidden = false; }
+
+    function setActiveTab() {
+      for (const tab of document.querySelectorAll(".tabs a[data-status]")) {
+        tab.classList.toggle("active", (tab.dataset.status ?? "") === currentStatus);
+      }
+    }
+
+    async function load() {
+      writeQueryParams({ status: currentStatus, offset });
+      setActiveTab();
+      try {
+        const res = await api.get(
+          "/spindle/drafts" + qs({ status: currentStatus, limit: LIMIT, offset })
+        );
+        const list = document.getElementById("list");
+        if (res.items.length === 0) {
+          list.innerHTML = '<p class="muted">No drafts.</p>';
+        } else {
+          list.innerHTML =
+            '<table><thead><tr><th>to</th><th>subject</th><th style="width:100px">status</th><th style="width:120px">updated</th><th style="width:240px">actions</th></tr></thead><tbody>' +
+            res.items
+              .map((d) => `
+                <tr>
+                  <td><span class="mono">${escapeHtml(d.to ?? "(unaddressed)")}</span></td>
+                  <td>
+                    <a href="/compose.html?draft=${encodeURIComponent(d.id)}">
+                      ${escapeHtml(d.subject ?? "(no subject)")}
+                    </a>
+                    <div class="muted">${escapeHtml(clip(d.body, 120))}</div>
+                  </td>
+                  <td>${escapeHtml(d.status)}</td>
+                  <td>${escapeHtml(relativeTs(d.updated_at_ms))}</td>
+                  <td class="actions">
+                    <a href="/compose.html?draft=${encodeURIComponent(d.id)}">
+                      <button type="button">edit</button>
+                    </a>
+                    <button type="button" class="primary" data-send="${encodeURIComponent(d.id)}">send</button>
+                    <button type="button" class="danger" data-cancel="${encodeURIComponent(d.id)}">cancel</button>
+                  </td>
+                </tr>`)
+              .join("") +
+            "</tbody></table>";
+
+          for (const btn of list.querySelectorAll("[data-send]")) {
+            btn.addEventListener("click", async () => {
+              if (!confirm("Send this draft now?")) return;
+              try {
+                const r = await api.post(`/spindle/drafts/${btn.dataset.send}/send`);
+                alert(`Sent: ${r.delivery_status} → ${r.delivered_to}\nmessage id: ${r.message_id}`);
+                load();
+              } catch (err) { showError(err.message); }
+            });
+          }
+          for (const btn of list.querySelectorAll("[data-cancel]")) {
+            btn.addEventListener("click", async () => {
+              if (!confirm("Discard this draft?")) return;
+              try { await api.del(`/spindle/drafts/${btn.dataset.cancel}`); load(); }
+              catch (err) { showError(err.message); }
+            });
+          }
+        }
+        renderPagination(
+          document.getElementById("pager"),
+          { limit: res.limit, offset: res.offset, total: res.total, hasMore: res.has_more },
+          (newOffset) => { offset = newOffset; load(); }
+        );
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    for (const tab of document.querySelectorAll(".tabs a[data-status]")) {
+      tab.addEventListener("click", (e) => {
+        e.preventDefault();
+        currentStatus = tab.dataset.status ?? "";
+        offset = 0;
+        load();
+      });
+    }
+    load();
+  </script>
+</body>
+</html>

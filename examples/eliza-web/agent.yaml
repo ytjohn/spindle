@@ -1,0 +1,22 @@
+agent:
+  id: eliza
+  name: Eliza
+
+# Phase 4.3 demo — spindle extension registers HTTP routes and a homepage.
+extensions:
+  - module: ./web-ext
+
+web:
+  enabled: true
+  port: 3200
+  bind_host: "127.0.0.1"
+  token_env: SPINDLE_WEB_TOKEN
+
+spindle:
+  repl: true   # set false for headless operation
+
+# Pi model/runtime config — adjust to match your local setup.
+# pi:
+#   provider: my-provider      # any model pi can already use (`pi --list-models`),
+#   model: my-model            # or one defined in ~/.pi/agent/models.json
+#   thinking_level: off

@@ -1,0 +1,20 @@
+agent:
+  id: eliza
+  name: Eliza
+
+pi:
+  provider: local-vllm
+  model: qwen3.5-35b
+  thinking_level: off
+  tools:
+    - read
+
+channels:
+  telegram:
+    bot_token: "123456:ABC-DEF"
+    allowed_users:
+      - "12345678"
+
+memory:
+  enabled: true
+  dream_interval_minutes: 60

@@ -1,0 +1,41 @@
+agent:
+  id: eliza-alice
+  name: Alice
+
+pi:
+  # provider/model are pi's own: any model pi can already use (`pi --list-models`),
+  # or one you define in ~/.pi/agent/models.json. Leave both out to use pi's default.
+  # provider: my-provider
+  # model: my-model
+  thinking_level: off
+
+memory:
+  enabled: true
+  database_path: ./memory.db
+
+inbox:
+  enabled: true
+  mail_root: ./mail
+  poll_interval_seconds: 5
+  # Share the operator mail root with eliza-inbox so any unrouted mail
+  # from either spindle lands in one place. Both spindles default to the
+  # XDG path when unset, so this line just makes the sharing explicit
+  # for the two-spindle demo; drop it if you want isolated operator
+  # mailboxes per agent.
+  operator_mail_root: ~/.local/share/spindle/operator/mail
+  contacts:
+    # Peer: eliza-inbox. Mail addressed to `eliza-inbox` here writes a
+    # file into its inbox dir; on the other side, its projector picks
+    # it up on the next tick.
+    - agent_id: eliza-inbox
+      mail_root: ../eliza-inbox/mail
+      display_name: Eliza (Inbox)
+      capabilities:
+        - chat
+        - inbox-demo
+
+web:
+  enabled: true
+  bind_host: 127.0.0.1
+  port: 8791
+  token_env: SPINDLE_WEB_TOKEN

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Outbox</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/">Dashboard</a>
+    <a href="/sessions.html">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/inbox.html">Inbox</a>
+    <a href="/operator-inbox.html">Operator</a>
+    <a href="/drafts.html">Drafts</a>
+    <a href="/routes.html">Routes</a>
+    <a href="/context.html">Context</a>
+    <a href="/memories.html">Memories</a>
+  </header>
+  <main>
+    <h1>Outbox (sent)</h1>
+    <p class="muted">Retained copies of messages this spindle sent. Delivery status shows whether the recipient route resolved.</p>
+    <div id="error" class="error" hidden></div>
+
+    <div class="controls">
+      <label style="margin: 0;">
+        <span class="label-text">delivery status</span>
+        <select id="delivery_status">
+          <option value="">(any)</option>
+          <option value="delivered">delivered</option>
+          <option value="unrouted">unrouted</option>
+          <option value="failed">failed</option>
+        </select>
+      </label>
+      <button id="apply" class="primary">Apply</button>
+      <a href="/compose.html" style="margin-left: auto;">
+        <button type="button" class="primary">+ Compose</button>
+      </a>
+    </div>
+
+    <div id="list" class="muted">Loading…</div>
+    <div class="pagination" id="pager"></div>
+  </main>
+  <script type="module">
+    import { api, qs } from "/app/api.js";
+    import { escapeHtml, relativeTs, clip, deliveryBadge } from "/app/format.js";
+    import { renderPagination, readQueryParam, writeQueryParams } from "/app/pagination.js";
+
+    const LIMIT = 50;
+    let offset = Number(readQueryParam("offset", "0")) || 0;
+    document.getElementById("delivery_status").value = readQueryParam("delivery_status", "");
+
+    const errBox = document.getElementById("error");
+    function showError(msg) { errBox.textContent = msg; errBox.hidden = false; }
+
+    async function load() {
+      const ds = document.getElementById("delivery_status").value.trim();
+      writeQueryParams({ delivery_status: ds, offset });
+      try {
+        const res = await api.get(
+          "/spindle/outbox" + qs({ delivery_status: ds, limit: LIMIT, offset })
+        );
+        const list = document.getElementById("list");
+        if (res.items.length === 0) {
+          list.innerHTML = '<p class="muted">No outbox messages yet.</p>';
+        } else {
+          list.innerHTML =
+            '<table><thead><tr><th>to</th><th>subject</th><th style="width:180px">delivery</th><th style="width:120px">sent</th></tr></thead><tbody>' +
+            res.items
+              .map((m) => `
+                <tr>
+                  <td><span class="mono">${escapeHtml(m.to)}</span></td>
+                  <td>
+                    <strong>${escapeHtml(m.subject ?? "(no subject)")}</strong>
+                    <div class="muted">${escapeHtml(clip(m.body, 120))}</div>
+                  </td>
+                  <td>
+                    ${deliveryBadge(m.delivery_status)}
+                    <div class="muted mono" style="font-size: 0.75em;">${escapeHtml(m.rel_path)}</div>
+                  </td>
+                  <td>${escapeHtml(relativeTs(m.sent_at_ms))}</td>
+                </tr>`)
+              .join("") +
+            "</tbody></table>";
+        }
+        renderPagination(
+          document.getElementById("pager"),
+          { limit: res.limit, offset: res.offset, total: res.total, hasMore: res.has_more },
+          (newOffset) => { offset = newOffset; load(); }
+        );
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+    document.getElementById("apply").addEventListener("click", () => { offset = 0; load(); });
+    load();
+  </script>
+</body>
+</html>

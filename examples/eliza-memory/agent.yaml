@@ -1,0 +1,110 @@
+agent:
+  id: eliza-memory
+  name: Eliza (Memory)
+
+pi:
+  # provider/model are pi's own: any model pi can already use (`pi --list-models`),
+  # or one you define in ~/.pi/agent/models.json. Leave both out to use pi's default.
+  # provider: my-provider
+  # model: my-model
+  thinking_level: off
+
+memory:
+  enabled: true
+  # Optional — default resolves to $XDG_DATA_HOME/spindle/memory.db.
+  # Using an agent-local path here so the smoke test doesn't touch your
+  # real spindle memory DB.
+  database_path: ./memory.db
+  # Embeddings disabled for the smoke test. Enable by uncommenting:
+  # embedding:
+  #   provider: my-provider
+  #   model: nomic-embed-text-v1.5
+  #   base_url: http://localhost:8001/v1
+
+  # --- Phase 2.1 scoring + association ---------------------------------
+  # scoring.mode defaults to "linear" — the Phase 2.0 weighted-sum
+  # ranking. Switch to "act-r" to use ACT-R power-law activation summed
+  # over the full memory_accesses history. Both modes write the access
+  # log so flipping at runtime is a config-only change with no backfill.
+  #
+  # scoring:
+  #   mode: act-r
+  #   weights:
+  #     act_r_d: 0.5         # power-law decay exponent
+  #     act_r_scale_ms: 1000 # time offset to avoid log(0)
+
+  # Association-based recall expansion is on by default. After the
+  # direct FTS phase, recall walks Hebbian links from the top seeds and
+  # surfaces well-connected memories even when they don't lexically
+  # match. Set enabled: false to opt out for bit-for-bit Phase 2.0
+  # behavior.
+  association:
+    enabled: true
+    seed_count: 5
+    per_seed: 3
+
+  # --- Spindle memory daydream (Phase 5) -------------------------------
+  # Uncomment the block below to enable the background auto-store loop.
+  # When on, Eliza doesn't need to call spindle_memory_store proactively
+  # — every 30 minutes (or interval_minutes) a daydream cycle reviews
+  # recent session activity and stores what's worth keeping. See
+  # AGENTS.md for how Eliza's behavior differs between "daydream on"
+  # and "daydream off".
+  #
+  # For a quick manual E2E test, use a small interval like 1 minute so
+  # you don't have to wait 30 min for the first cycle:
+  #
+  daydream:
+    enabled: true
+    interval_minutes: 1
+    lookback_minutes: 5
+    min_turns_since_last: 2
+    max_store_per_cycle: 5
+  #
+  # Optional model override — daydream can use a smaller/faster model
+  # than the main conversation for summarization work:
+  #
+  #   model:
+  #     provider: my-provider
+  #     model: qwen3-8b-instruct
+  #     thinking_level: off
+
+# --- Phase 4 Web API (walking skeleton) --------------------------------
+# Top-level `web:` block. Uncomment to boot Fastify alongside the stdin
+# REPL. Endpoints today: `/health` (no auth) and `/spindle/info` (bearer
+# auth). The token is read from the env var named by `token_env`
+# (default SPINDLE_WEB_TOKEN). Set it before launching:
+#
+#   export SPINDLE_WEB_TOKEN=your-secret-token
+#   bun run start -- examples/eliza-memory
+#
+#   curl http://127.0.0.1:8787/health
+#   curl -H "Authorization: Bearer $SPINDLE_WEB_TOKEN" \
+#        http://127.0.0.1:8787/spindle/info
+#
+web:
+  enabled: true
+  bind_host: 0.0.0.0
+  port: 8787
+  token_env: SPINDLE_WEB_TOKEN
+  # ui_enabled: true   # default true; set false for API-only headless
+
+# --- Phase 4.4a Inbox / Outbox / Contacts -----------------------------
+# Uncomment to enable the addressed-delivery mail subsystem. Messages
+# live as markdown files under mail_root/{inbox,outbox,drafts}/ — SQLite
+# is a per-spindle derived projection (same pattern as the session
+# ingester). When on, the spindle_inbox LLM tool is auto-registered.
+#
+# Operator sends via `POST /spindle/outbox/send`. Unroutable recipients
+# fall through to the operator inbox (see inbox.operator_mail_root).
+#
+# inbox:
+#   enabled: true
+#   mail_root: .pi/mail
+#   poll_interval_seconds: 30
+#   # operator_mail_root defaults to $XDG_DATA_HOME/spindle/operator/mail
+#   # contacts:
+#   #   - agent_id: other-agent
+#   #     mail_root: /path/to/other-agent/.pi/mail
+#   #     display_name: Other Agent
+

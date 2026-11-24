@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Inbox</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/">Dashboard</a>
+    <a href="/sessions.html">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/inbox.html" class="active">Inbox</a>
+    <a href="/operator-inbox.html">Operator</a>
+    <a href="/drafts.html">Drafts</a>
+    <a href="/routes.html">Routes</a>
+    <a href="/context.html">Context</a>
+    <a href="/memories.html">Memories</a>
+  </header>
+  <main>
+    <h1>Inbox</h1>
+    <div id="error" class="error" hidden></div>
+
+    <div class="tabs">
+      <a href="#unread" id="tab-unread" data-status="unread" class="active">Unread</a>
+      <a href="#read" id="tab-read" data-status="read">Read</a>
+      <a href="#tombstoned" id="tab-tombstoned" data-status="tombstoned">Tombstoned</a>
+      <a href="#all" id="tab-all" data-status="all">All</a>
+      <span style="margin-left: auto;"></span>
+      <a href="/compose.html"><button type="button" class="primary">+ Compose</button></a>
+    </div>
+
+    <div class="controls">
+      <label style="margin: 0; flex: 1;">
+        <span class="label-text">search (FTS: subject / body / from)</span>
+        <input type="search" id="q" placeholder="e.g. firmware">
+      </label>
+      <label style="margin: 0;">
+        <span class="label-text">from</span>
+        <input type="text" id="from" placeholder="exact sender name">
+      </label>
+      <label style="margin: 0;">
+        <span class="label-text">priority</span>
+        <select id="priority">
+          <option value="">(any)</option>
+          <option value="urgent">urgent</option>
+          <option value="high">high</option>
+          <option value="normal">normal</option>
+          <option value="low">low</option>
+        </select>
+      </label>
+      <button id="apply" class="primary">Apply</button>
+    </div>
+
+    <div id="list" class="muted">Loading…</div>
+    <div class="pagination" id="pager"></div>
+  </main>
+  <script type="module">
+    import { api, qs } from "/app/api.js";
+    import {
+      escapeHtml,
+      relativeTs,
+      clip,
+      priorityBadge,
+      inboxStatusBadge,
+    } from "/app/format.js";
+    import { renderPagination, readQueryParam, writeQueryParams } from "/app/pagination.js";
+
+    const LIMIT = 50;
+    let offset = Number(readQueryParam("offset", "0")) || 0;
+    let currentStatus = readQueryParam("status", "unread");
+    const validStatuses = new Set(["unread", "read", "tombstoned", "all"]);
+    if (!validStatuses.has(currentStatus)) currentStatus = "unread";
+
+    document.getElementById("q").value = readQueryParam("q", "");
+    document.getElementById("from").value = readQueryParam("from", "");
+    document.getElementById("priority").value = readQueryParam("priority", "");
+
+    const errBox = document.getElementById("error");
+    function showError(msg) {
+      errBox.textContent = msg;
+      errBox.hidden = false;
+    }
+
+    function setActiveTab() {
+      for (const tab of document.querySelectorAll(".tabs a[data-status]")) {
+        tab.classList.toggle("active", tab.dataset.status === currentStatus);
+      }
+    }
+
+    async function load() {
+      const q = document.getElementById("q").value.trim();
+      const from = document.getElementById("from").value.trim();
+      const priority = document.getElementById("priority").value.trim();
+      writeQueryParams({ status: currentStatus, q, from, priority, offset });
+      setActiveTab();
+
+      const url = q
+        ? "/spindle/inbox/search" +
+          qs({ q, status: currentStatus, limit: LIMIT, offset })
+        : "/spindle/inbox" +
+          qs({ status: currentStatus, from, priority, limit: LIMIT, offset });
+
+      try {
+        const res = await api.get(url);
+        const list = document.getElementById("list");
+        if (res.items.length === 0) {
+          list.innerHTML = `<p class="muted">No ${currentStatus} messages${q ? ` match "${escapeHtml(q)}"` : ""}.</p>`;
+        } else {
+          list.innerHTML =
+            '<table><thead><tr><th>from</th><th>subject</th><th style="width:200px">id / flags</th><th style="width:120px">received</th><th style="width:200px">actions</th></tr></thead><tbody>' +
+            res.items
+              .map((m) => {
+                const attachCount = Array.isArray(m.attachments) ? m.attachments.length : 0;
+                const attachIndicator = attachCount > 0 ? ` 📎${attachCount}` : "";
+                return `
+                  <tr>
+                    <td>
+                      <strong>${escapeHtml(m.from)}</strong>
+                      <div class="muted mono" style="font-size: 0.75em;">${escapeHtml(m.from_auth)}</div>
+                    </td>
+                    <td>
+                      <a href="/inbox-message.html?id=${encodeURIComponent(m.id)}">
+                        ${escapeHtml(m.subject ?? "(no subject)")}
+                      </a>${attachIndicator}
+                      <div class="muted">${escapeHtml(clip(m.body, 120))}</div>
+                    </td>
+                    <td>
+                      <div class="mono" style="font-size: 0.75em;">${escapeHtml(m.id)}</div>
+                      <div>${inboxStatusBadge(m.status)} ${priorityBadge(m.priority)}</div>
+                    </td>
+                    <td>${escapeHtml(relativeTs(m.date_ms))}</td>
+                    <td class="actions">
+                      <a href="/inbox-message.html?id=${encodeURIComponent(m.id)}">
+                        <button type="button">open</button>
+                      </a>
+                      ${
+                        m.status === "unread"
+                          ? `<button type="button" data-read="${encodeURIComponent(m.id)}">read</button>`
+                          : m.status === "read"
+                            ? `<button type="button" data-unread="${encodeURIComponent(m.id)}">unread</button>`
+                            : ""
+                      }
+                      ${
+                        m.status === "tombstoned"
+                          ? `<button type="button" class="primary" data-restore="${encodeURIComponent(m.id)}">restore</button>`
+                          : `<button type="button" class="danger" data-delete="${encodeURIComponent(m.id)}">del</button>`
+                      }
+                    </td>
+                  </tr>`;
+              })
+              .join("") +
+            "</tbody></table>";
+
+          for (const btn of list.querySelectorAll("[data-read]")) {
+            btn.addEventListener("click", async () => {
+              try { await api.post(`/spindle/inbox/${btn.dataset.read}/read`); load(); }
+              catch (err) { showError(err.message); }
+            });
+          }
+          for (const btn of list.querySelectorAll("[data-unread]")) {
+            btn.addEventListener("click", async () => {
+              try { await api.post(`/spindle/inbox/${btn.dataset.unread}/unread`); load(); }
+              catch (err) { showError(err.message); }
+            });
+          }
+          for (const btn of list.querySelectorAll("[data-delete]")) {
+            btn.addEventListener("click", async () => {
+              if (!confirm(`Tombstone ${btn.dataset.delete}?`)) return;
+              try { await api.del(`/spindle/inbox/${btn.dataset.delete}`); load(); }
+              catch (err) { showError(err.message); }
+            });
+          }
+          for (const btn of list.querySelectorAll("[data-restore]")) {
+            btn.addEventListener("click", async () => {
+              try { await api.post(`/spindle/inbox/${btn.dataset.restore}/restore`); load(); }
+              catch (err) { showError(err.message); }
+            });
+          }
+        }
+        renderPagination(
+          document.getElementById("pager"),
+          { limit: res.limit, offset: res.offset, total: res.total, hasMore: res.has_more },
+          (newOffset) => {
+            offset = newOffset;
+            load();
+          }
+        );
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+
+    for (const tab of document.querySelectorAll(".tabs a[data-status]")) {
+      tab.addEventListener("click", (e) => {
+        e.preventDefault();
+        currentStatus = tab.dataset.status;
+        offset = 0;
+        load();
+      });
+    }
+    document.getElementById("apply").addEventListener("click", () => {
+      offset = 0;
+      load();
+    });
+    document.getElementById("q").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { offset = 0; load(); }
+    });
+
+    load();
+  </script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+agent:
+  id: eliza
+  name: Eliza
+
+# Pi model/runtime config — adjust to match your local setup.
+# pi:
+#   provider: my-provider      # any model pi can already use (`pi --list-models`),
+#   model: my-model            # or one defined in ~/.pi/agent/models.json
+#   thinking_level: off
+#   continue_session: true        # Resume the most recent session on boot
+#   # resume_session: /absolute/path/to/session.jsonl  # Or load a specific one
+# CLI overrides: `spindle run -c <dir>` or `spindle run --resume <file> <dir>`
+
+# Telegram channel — uncomment to enable bidirectional messaging.
+# Get a bot token from @BotFather on Telegram. The allowed_users list is
+# your Telegram user ID; unlisted users are silently ignored.
+# channels:
+#   telegram:
+#     bot_token: "123456:ABC-DEF_your-token-here"
+#     allowed_users:
+#       - "12345678"
+#     # Extended form (for future multi-user routing — Phase 3 only checks id):
+#     # allowed_users:
+#     #   - { id: "12345678", access: "full" }
+#     #   - { id: "87654321", access: "single", session: "guest" }

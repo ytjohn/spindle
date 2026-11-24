@@ -1,0 +1,6 @@
+memory.db
+memory.db-shm
+memory.db-wal
+mail/
+operator-mail/
+.pi/

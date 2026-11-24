@@ -1,0 +1,47 @@
+{
+  "name": "spindle",
+  "version": "1.0.0",
+  "description": "A runtime that runs a pi coding agent as a long-lived service: channels, memory, scheduling, plugins.",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun --bun run vitest run",
+    "test:watch": "bun --bun run vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "bin": {
+    "spindle": "src/index.ts"
+  },
+  "keywords": [
+    "agent",
+    "pi",
+    "telegram",
+    "llm",
+    "runtime"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "@fastify/static": "^9.1.1",
+    "@sinclair/typebox": "^0.34.49",
+    "croner": "^10.0.1",
+    "fastify": "^5.8.5",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.12",
+    "ajv": "^8.18.0",
+    "alpinejs": "^3.15.11",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "private": true,
+  "patchedDependencies": {
+    "@earendil-works/pi-ai@0.84.4": "patches/@earendil-works%2Fpi-ai@0.84.4.patch"
+  }
+}

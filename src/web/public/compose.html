@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Compose</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/">Dashboard</a>
+    <a href="/sessions.html">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/inbox.html">Inbox</a>
+    <a href="/operator-inbox.html">Operator</a>
+    <a href="/drafts.html" class="active">Drafts</a>
+    <a href="/routes.html">Routes</a>
+    <a href="/context.html">Context</a>
+    <a href="/memories.html">Memories</a>
+  </header>
+  <main>
+    <h1 id="title">Compose</h1>
+    <p class="muted" id="context"></p>
+    <div id="error" class="error" hidden></div>
+    <div id="success" class="success" hidden></div>
+
+    <form id="compose-form">
+      <div class="hstack">
+        <label style="margin: 0; flex: 1;">
+          <span class="label-text">to (agent_id)</span>
+          <input type="text" id="to" required placeholder="e.g. eliza-alice, operator, chassy">
+        </label>
+        <label style="margin: 0; flex: 1;">
+          <span class="label-text">from (displayed to recipient)</span>
+          <input type="text" id="from" placeholder="defaults to your agent id; override for pseudonyms">
+        </label>
+      </div>
+      <label>
+        <span class="label-text">subject</span>
+        <input type="text" id="subject">
+      </label>
+      <div class="hstack">
+        <label style="margin: 0; flex: 1;">
+          <span class="label-text">priority</span>
+          <select id="priority">
+            <option value="">(none)</option>
+            <option value="low">low</option>
+            <option value="normal">normal</option>
+            <option value="high">high</option>
+            <option value="urgent">urgent</option>
+          </select>
+        </label>
+        <label style="margin: 0; flex: 1;">
+          <span class="label-text">kind</span>
+          <select id="kind">
+            <option value="message">message</option>
+            <option value="reply">reply</option>
+            <option value="notice">notice</option>
+            <option value="task">task</option>
+          </select>
+        </label>
+        <label style="margin: 0; flex: 1;">
+          <span class="label-text">thread_id (optional)</span>
+          <input type="text" id="thread_id">
+        </label>
+      </div>
+      <label>
+        <span class="label-text">body (markdown OK)</span>
+        <textarea id="body" required rows="12"></textarea>
+      </label>
+      <input type="hidden" id="in_reply_to">
+      <input type="hidden" id="draft_id">
+
+      <div class="card" id="attachment-card" hidden>
+        <h3 style="margin: 0 0 8px 0;">Attachments</h3>
+        <p class="muted" style="margin: 0 0 12px 0;">
+          Save the draft before adding attachments. Files are stored under the draft dir and shipped when you send.
+        </p>
+        <div id="attachment-list" class="muted">none</div>
+        <div class="hstack" style="margin-top: 8px;">
+          <input type="file" id="attachment-input" multiple>
+          <button type="button" id="attachment-upload">Upload</button>
+        </div>
+      </div>
+
+      <div class="hstack" style="margin-top: 16px;">
+        <button type="submit" id="send-btn" class="primary">Send now</button>
+        <button type="button" id="save-btn">Save as draft</button>
+        <a href="/drafts.html"><button type="button">Cancel</button></a>
+        <span class="muted" id="route-hint" style="margin-left: auto;"></span>
+      </div>
+    </form>
+
+    <div id="result-card" class="card" hidden>
+      <h2>Delivery result</h2>
+      <div id="result-body"></div>
+    </div>
+  </main>
+  <script type="module">
+    import { api, qs, getToken } from "/app/api.js";
+    import { escapeHtml, deliveryBadge, formatBytes } from "/app/format.js";
+
+    const params = new URLSearchParams(window.location.search);
+    const errBox = document.getElementById("error");
+    const okBox = document.getElementById("success");
+    function showError(msg) { errBox.textContent = msg; errBox.hidden = false; okBox.hidden = true; }
+    function showOk(msg) { okBox.textContent = msg; okBox.hidden = false; errBox.hidden = true; }
+    function hideResult() { document.getElementById("result-card").hidden = true; }
+
+    function setDraftActive(id) {
+      document.getElementById("draft_id").value = id;
+      const card = document.getElementById("attachment-card");
+      card.hidden = !id;
+      if (id) refreshAttachments();
+    }
+
+    async function refreshAttachments() {
+      const id = document.getElementById("draft_id").value;
+      const list = document.getElementById("attachment-list");
+      if (!id) { list.innerHTML = "none"; return; }
+      try {
+        const res = await api.get(`/spindle/drafts/${encodeURIComponent(id)}/attachments`);
+        if (res.total === 0) {
+          list.innerHTML = '<p class="muted">No attachments yet.</p>';
+          return;
+        }
+        list.innerHTML = res.items.map((a) => `
+          <div class="hstack" style="justify-content: space-between;">
+            <span>📎 <strong>${escapeHtml(a.filename)}</strong>
+              <span class="muted">(${escapeHtml(a.content_type ?? "?")}, ${formatBytes(a.size_bytes)})</span>
+            </span>
+            <button type="button" class="danger" data-del-att="${encodeURIComponent(a.filename)}">remove</button>
+          </div>
+        `).join("");
+        for (const btn of list.querySelectorAll("[data-del-att]")) {
+          btn.addEventListener("click", async () => {
+            if (!confirm(`Remove attachment ${btn.dataset.delAtt}?`)) return;
+            try {
+              await api.del(`/spindle/drafts/${encodeURIComponent(id)}/attachments/${btn.dataset.delAtt}`);
+              refreshAttachments();
+            } catch (err) { showError(err.message); }
+          });
+        }
+      } catch (err) { showError(err.message); }
+    }
+
+    async function uploadOne(id, file) {
+      const token = getToken();
+      if (!token) throw new Error("no auth token");
+      const bytes = await file.arrayBuffer();
+      const res = await fetch(`/spindle/drafts/${encodeURIComponent(id)}/attachments`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": file.type || "application/octet-stream",
+          "X-Filename": file.name,
+        },
+        body: bytes,
+      });
+      if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+      return res.json();
+    }
+
+    document.getElementById("attachment-upload").addEventListener("click", async () => {
+      const id = document.getElementById("draft_id").value;
+      if (!id) { showError("save the draft first"); return; }
+      const input = document.getElementById("attachment-input");
+      const files = Array.from(input.files ?? []);
+      if (files.length === 0) return;
+      try {
+        for (const f of files) await uploadOne(id, f);
+        input.value = "";
+        showOk(`Uploaded ${files.length} file${files.length === 1 ? "" : "s"}.`);
+        refreshAttachments();
+      } catch (err) { showError(err.message); }
+    });
+
+    // Prefill from query params (reply flow) or from an existing draft.
+    const draftId = params.get("draft");
+    if (draftId) {
+      setDraftActive(draftId);
+      try {
+        const d = await api.get(`/spindle/drafts/${encodeURIComponent(draftId)}`);
+        document.getElementById("to").value = d.to ?? "";
+        document.getElementById("from").value = d.from ?? "";
+        document.getElementById("subject").value = d.subject ?? "";
+        document.getElementById("priority").value = d.priority ?? "";
+        document.getElementById("kind").value = d.kind ?? "message";
+        document.getElementById("body").value = d.body ?? "";
+        document.getElementById("title").textContent = `Editing draft — ${d.id}`;
+        document.getElementById("context").textContent = `Draft file: ${d.rel_path}`;
+      } catch (err) {
+        showError(`could not load draft ${draftId}: ${err.message}`);
+      }
+    } else {
+      for (const k of ["to", "subject", "thread_id", "in_reply_to", "body"]) {
+        const v = params.get(k);
+        if (v) document.getElementById(k).value = v;
+      }
+      if (params.get("in_reply_to")) {
+        document.getElementById("kind").value = "reply";
+        document.getElementById("context").textContent = `Replying to ${params.get("in_reply_to")}`;
+      }
+    }
+
+    // Suggest known routes next to the "to" field as the operator types.
+    const hint = document.getElementById("route-hint");
+    try {
+      const routes = await api.get("/spindle/routes");
+      const ids = routes.items
+        .filter((r) => r.agent_id !== "self")
+        .map((r) => r.agent_id);
+      hint.textContent = `Known routes: ${ids.join(", ")}`;
+    } catch { /* non-fatal */ }
+
+    function collect() {
+      const body = document.getElementById("body").value;
+      const to = document.getElementById("to").value.trim();
+      const from = document.getElementById("from").value.trim();
+      const subject = document.getElementById("subject").value.trim();
+      const priority = document.getElementById("priority").value.trim();
+      const kind = document.getElementById("kind").value.trim();
+      const thread_id = document.getElementById("thread_id").value.trim();
+      const in_reply_to = document.getElementById("in_reply_to").value.trim();
+      const payload = { body };
+      if (to) payload.to = to;
+      if (from) payload.from = from;
+      if (subject) payload.subject = subject;
+      if (priority) payload.priority = priority;
+      if (kind) payload.kind = kind;
+      if (thread_id) payload.thread_id = thread_id;
+      if (in_reply_to) payload.in_reply_to = in_reply_to;
+      return payload;
+    }
+
+    document.getElementById("save-btn").addEventListener("click", async () => {
+      hideResult();
+      const payload = collect();
+      const currentDraft = document.getElementById("draft_id").value;
+      try {
+        let res;
+        if (currentDraft) {
+          res = await api.patch(`/spindle/drafts/${encodeURIComponent(currentDraft)}`, payload);
+        } else {
+          res = await api.post("/spindle/drafts", payload);
+          setDraftActive(res.id);
+          document.getElementById("title").textContent = `Editing draft — ${res.id}`;
+          const url = new URL(window.location.href);
+          url.searchParams.set("draft", res.id);
+          window.history.replaceState(null, "", url.toString());
+        }
+        showOk(`Saved draft ${res.id}.`);
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    document.getElementById("compose-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      hideResult();
+      const payload = collect();
+      if (!payload.to) { showError("'to' is required to send"); return; }
+      const currentDraft = document.getElementById("draft_id").value;
+      try {
+        let result;
+        if (currentDraft) {
+          // Save latest edits to the draft, then send it.
+          await api.patch(`/spindle/drafts/${encodeURIComponent(currentDraft)}`, payload);
+          result = await api.post(`/spindle/drafts/${encodeURIComponent(currentDraft)}/send`);
+        } else {
+          result = await api.post("/spindle/outbox/send", payload);
+        }
+        renderResult(result);
+      } catch (err) {
+        showError(err.message);
+      }
+    });
+
+    function renderResult(r) {
+      const card = document.getElementById("result-card");
+      const body = document.getElementById("result-body");
+      const routesList = r.available_routes
+        ? `<div><strong>Known peer routes:</strong> ${r.available_routes.map((p) =>
+            p.capabilities && p.capabilities.length > 0
+              ? `${escapeHtml(p.agent_id)} (${p.capabilities.map(escapeHtml).join(", ")})`
+              : escapeHtml(p.agent_id)
+          ).join(", ")}</div>`
+        : "";
+      body.innerHTML = `
+        <div>${deliveryBadge(r.delivery_status)}</div>
+        <div><strong>Message id:</strong> <span class="mono">${escapeHtml(r.message_id)}</span></div>
+        <div><strong>Delivered to:</strong> <span class="mono">${escapeHtml(r.delivered_to)}</span></div>
+        <div><strong>Mail root:</strong> <span class="mono">${escapeHtml(r.delivered_mail_root)}</span></div>
+        <div><strong>Rel path:</strong> <span class="mono">${escapeHtml(r.rel_path)}</span></div>
+        <div><strong>Outbox retained:</strong> ${r.outbox_retained ? "yes" : "no"}</div>
+        ${routesList}
+      `;
+      card.hidden = false;
+      showOk(`${r.delivery_status} → ${r.delivered_to}`);
+    }
+  </script>
+</body>
+</html>

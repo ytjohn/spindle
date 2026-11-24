@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Spindle — Context</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <span class="brand">Spindle</span>
+    <a href="/">Dashboard</a>
+    <a href="/sessions.html">Sessions</a>
+    <a href="/events.html">Events</a>
+    <a href="/context.html" class="active">Context</a>
+    <a href="/inbox.html">Inbox</a>
+    <a href="/operator-inbox.html">Operator</a>
+    <a href="/drafts.html">Drafts</a>
+    <a href="/routes.html">Routes</a>
+    <a href="/memories.html">Memories</a>
+  </header>
+  <main>
+    <h1>Context &amp; Compaction</h1>
+    <div id="error" class="error" hidden></div>
+
+    <!-- Live context fill bar -->
+    <div class="ctx-header" id="ctx-live">
+      <div class="ctx-fill">
+        <span class="ctx-label">Context</span>
+        <span class="ctx-bar"><span class="ctx-bar-fill" id="live-bar" style="width:0%;background:var(--ok)"></span></span>
+        <span id="live-pct" class="mono" style="font-size:1em;font-weight:600">—</span>
+      </div>
+      <div><span class="ctx-label">tokens</span> <span id="live-tokens" class="mono">—</span></div>
+      <div><span class="ctx-label">window</span> <span id="live-window" class="mono">—</span></div>
+      <div><span class="ctx-label">session</span> <span id="live-session" class="mono muted" style="font-size:0.82em">—</span></div>
+      <div><button id="refresh-btn" style="padding:4px 10px;font-size:0.85em">↺ refresh</button></div>
+    </div>
+
+    <!-- Tab nav -->
+    <div class="tabs">
+      <a href="#turns" id="tab-turns" class="active">Turns</a>
+      <a href="#compacts" id="tab-compacts">Compacts</a>
+    </div>
+
+    <!-- Turns panel -->
+    <div id="panel-turns">
+      <div id="turns-list" class="muted">Loading…</div>
+      <div class="pagination" id="turns-pager"></div>
+    </div>
+
+    <!-- Compacts panel -->
+    <div id="panel-compacts" hidden>
+      <div id="compacts-list" class="muted">Loading…</div>
+      <div class="pagination" id="compacts-pager"></div>
+    </div>
+  </main>
+  <script type="module">
+    import { api, qs } from "/app/api.js";
+    import {
+      escapeHtml,
+      relativeTs,
+      formatTs,
+      formatMs,
+      compactTriggerBadge,
+      contextBar,
+    } from "/app/format.js";
+    import { renderPagination, readQueryParam, writeQueryParams } from "/app/pagination.js";
+
+    const LIMIT = 50;
+    const errBox = document.getElementById("error");
+    function showError(msg) { errBox.textContent = msg; errBox.hidden = false; }
+
+    // ── Live context bar ─────────────────────────────────────────────────
+    async function loadLive() {
+      try {
+        const cur = await api.get("/spindle/context/current");
+        const live = cur.live ?? cur.latest;
+        const pct = live?.percent ?? null;
+        const tokens = live?.tokens ?? null;
+        const window_ = live?.context_window ?? null;
+
+        const bar = document.getElementById("live-bar");
+        const pctEl = document.getElementById("live-pct");
+        const tokEl = document.getElementById("live-tokens");
+        const winEl = document.getElementById("live-window");
+        const sesEl = document.getElementById("live-session");
+
+        if (pct !== null) {
+          const p = Math.min(100, Math.max(0, pct));
+          bar.style.width = p.toFixed(1) + "%";
+          bar.style.background = p >= 80 ? "var(--danger)" : p >= 60 ? "var(--warn)" : "var(--ok)";
+          pctEl.textContent = p.toFixed(1) + "%";
+        }
+        tokEl.textContent = tokens !== null ? tokens.toLocaleString() : "—";
+        winEl.textContent = window_ !== null ? window_.toLocaleString() : "—";
+        sesEl.textContent = cur.session_id ? clip32(cur.session_id) : "—";
+        sesEl.title = cur.session_id ?? "";
+      } catch (e) {
+        console.warn("live context fetch failed:", e.message);
+      }
+    }
+
+    function clip32(s) {
+      return s.length > 32 ? s.slice(0, 12) + "…" + s.slice(-8) : s;
+    }
+
+    document.getElementById("refresh-btn").onclick = loadLive;
+    loadLive();
+
+    // ── Tab switching ────────────────────────────────────────────────────
+    const tabTurns = document.getElementById("tab-turns");
+    const tabCompacts = document.getElementById("tab-compacts");
+    const panelTurns = document.getElementById("panel-turns");
+    const panelCompacts = document.getElementById("panel-compacts");
+
+    function showTab(tab) {
+      const isTurns = tab === "turns";
+      tabTurns.classList.toggle("active", isTurns);
+      tabCompacts.classList.toggle("active", !isTurns);
+      panelTurns.hidden = !isTurns;
+      panelCompacts.hidden = isTurns;
+      writeQueryParams({ tab });
+    }
+
+    tabTurns.onclick = (e) => { e.preventDefault(); showTab("turns"); };
+    tabCompacts.onclick = (e) => { e.preventDefault(); showTab("compacts"); };
+
+    const initTab = readQueryParam("tab", "turns");
+    if (initTab === "compacts") showTab("compacts");
+
+    // ── Turns table ──────────────────────────────────────────────────────
+    let turnsOffset = Number(readQueryParam("t_offset", "0")) || 0;
+
+    async function loadTurns(offset) {
+      turnsOffset = offset;
+      writeQueryParams({ t_offset: offset || undefined });
+      const listEl = document.getElementById("turns-list");
+      const pagerEl = document.getElementById("turns-pager");
+      listEl.innerHTML = '<span class="muted">Loading…</span>';
+      try {
+        const data = await api.get("/spindle/context/stats" + qs({ limit: LIMIT, offset }));
+        if (data.items.length === 0) {
+          listEl.innerHTML = '<p class="muted">No turn stats recorded yet. Telemetry requires <span class="mono">memory.enabled: true</span>.</p>';
+          pagerEl.innerHTML = "";
+          return;
+        }
+        listEl.innerHTML =
+          '<table>' +
+          '<thead><tr>' +
+          '<th style="width:50px">#</th>' +
+          '<th style="width:120px">recorded</th>' +
+          '<th>context</th>' +
+          '<th style="width:110px">ctx tokens</th>' +
+          '<th style="width:90px">in tokens</th>' +
+          '<th style="width:80px">latency</th>' +
+          '<th style="width:50px">tools</th>' +
+          '<th style="width:90px">compact</th>' +
+          '</tr></thead><tbody>' +
+          data.items.map((r) => {
+            const compactCell = r.compacted_this_turn
+              ? compactTriggerBadge(r.compact_trigger)
+              : '<span class="muted">—</span>';
+            const ctxCell = r.context_percent !== null
+              ? contextBar(r.context_percent)
+              : '<span class="muted">—</span>';
+            const ctxTokens = r.context_tokens !== null && r.context_window !== null
+              ? `<span class="mono" style="font-size:0.85em">${r.context_tokens.toLocaleString()}<span class="muted">/${r.context_window.toLocaleString()}</span></span>`
+              : '<span class="muted">—</span>';
+            return `<tr>
+              <td class="mono">${escapeHtml(String(r.turn_index))}</td>
+              <td title="${escapeHtml(formatTs(r.recorded_at))}">${escapeHtml(relativeTs(r.recorded_at))}</td>
+              <td>${ctxCell}</td>
+              <td>${ctxTokens}</td>
+              <td class="mono">${r.input_tokens !== null ? r.input_tokens.toLocaleString() : "—"}</td>
+              <td class="mono">${formatMs(r.ms_since_prompt)}</td>
+              <td class="mono">${r.tool_calls ?? "—"}</td>
+              <td>${compactCell}</td>
+            </tr>`;
+          }).join("") +
+          '</tbody></table>';
+
+        renderPagination(pagerEl, { limit: LIMIT, offset, total: data.total, hasMore: data.has_more }, loadTurns);
+      } catch (e) {
+        listEl.innerHTML = `<p class="error">${escapeHtml(e.message)}</p>`;
+      }
+    }
+
+    loadTurns(turnsOffset);
+
+    // ── Compact events table ─────────────────────────────────────────────
+    let compactsOffset = Number(readQueryParam("c_offset", "0")) || 0;
+
+    async function loadCompacts(offset) {
+      compactsOffset = offset;
+      writeQueryParams({ c_offset: offset || undefined });
+      const listEl = document.getElementById("compacts-list");
+      const pagerEl = document.getElementById("compacts-pager");
+      listEl.innerHTML = '<span class="muted">Loading…</span>';
+      try {
+        const data = await api.get("/spindle/context/compact-events" + qs({ limit: LIMIT, offset }));
+        if (data.items.length === 0) {
+          listEl.innerHTML = '<p class="muted">No compact events yet.</p>';
+          pagerEl.innerHTML = "";
+          return;
+        }
+        listEl.innerHTML =
+          '<table>' +
+          '<thead><tr>' +
+          '<th style="width:110px">trigger</th>' +
+          '<th style="width:130px">started</th>' +
+          '<th style="width:70px">duration</th>' +
+          '<th style="width:120px">tokens before</th>' +
+          '<th style="width:120px">tokens after</th>' +
+          '<th style="width:80px">reduction</th>' +
+          '<th>status / reason</th>' +
+          '</tr></thead><tbody>' +
+          data.items.map((e) => {
+            const duration = (e.started_at && e.ended_at)
+              ? formatMs(e.ended_at - e.started_at)
+              : "—";
+            const reduction = (e.tokens_before && e.tokens_after)
+              ? ((1 - e.tokens_after / e.tokens_before) * 100).toFixed(1) + "%"
+              : "—";
+            let statusCell;
+            if (e.aborted) {
+              statusCell = `<span class="badge tombstoned">aborted</span>${e.error ? ` <span class="muted" style="font-size:0.82em">${escapeHtml(e.error)}</span>` : ""}`;
+            } else if (e.error) {
+              statusCell = `<span class="badge tombstoned">error</span> <span class="muted" style="font-size:0.82em">${escapeHtml(e.error)}</span>`;
+            } else if (e.ended_at) {
+              statusCell = '<span class="badge kind-semantic">ok</span>';
+            } else {
+              statusCell = '<span class="muted">in progress</span>';
+            }
+            const reasonCell = e.reason
+              ? `<span class="muted" style="font-size:0.82em">${escapeHtml(e.reason)}</span>`
+              : "";
+            return `<tr>
+              <td>${compactTriggerBadge(e.trigger)}</td>
+              <td title="${escapeHtml(formatTs(e.started_at))}">${escapeHtml(relativeTs(e.started_at))}</td>
+              <td class="mono">${escapeHtml(duration)}</td>
+              <td class="mono">${e.tokens_before !== null ? e.tokens_before.toLocaleString() : "—"}</td>
+              <td class="mono">${e.tokens_after !== null ? e.tokens_after.toLocaleString() : "—"}</td>
+              <td class="mono">${escapeHtml(reduction)}</td>
+              <td>${statusCell} ${reasonCell}</td>
+            </tr>`;
+          }).join("") +
+          '</tbody></table>';
+
+        renderPagination(pagerEl, { limit: LIMIT, offset, total: data.total, hasMore: data.has_more }, loadCompacts);
+      } catch (e) {
+        listEl.innerHTML = `<p class="error">${escapeHtml(e.message)}</p>`;
+      }
+    }
+
+    // Lazy-load compacts when the tab is first shown
+    tabCompacts.addEventListener("click", () => {
+      if (document.getElementById("compacts-list").textContent === "Loading…") {
+        loadCompacts(compactsOffset);
+      }
+    }, { once: false });
+
+    if (initTab === "compacts") loadCompacts(compactsOffset);
+  </script>
+</body>
+</html>

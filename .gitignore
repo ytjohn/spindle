@@ -1,0 +1,67 @@
+# dependencies (bun install)
+node_modules
+
+beads/
+
+# pi agent
+.pi/
+
+# reference implementations fetched for inspection (TelePi, etc.)
+tmp/
+
+# Example agents with real credentials — never commit these
+examples/eliza-telegram/
+examples/*-telegram/
+
+# Claude Code per-developer settings (allowlists, local overrides)
+.claude/settings.local.json
+
+# Serena MCP server scratch directory (per-developer)
+.serena/
+
+# Example agent memory DBs — keep the example config but not the data
+examples/*/memory.db
+examples/*/memory.db-*
+
+# output
+out
+dist
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+graphify-out/
+.wake/
+.vscode/
+
+# git worktrees (isolated workspaces, never tracked)
+.worktrees/
