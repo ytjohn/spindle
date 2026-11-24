@@ -407,7 +407,9 @@ describe("spindle-speak extension", () => {
   });
 
   // Varying the delivery must not walk past the repeat guard.
-  it("counts a repeat even when instructions differ", async () => {
+  // The first utterance has to be produced for the second to be a repeat,
+  // and producing one runs ffmpeg.
+  it.skipIf(!hasFfmpeg)("counts a repeat even when instructions differ", async () => {
     stubSpeechFetch(makeWav(1));
     bindSpeechSettings(settings(tmpDir, { rateLimit: { windowMs: 600000, maxCalls: 8, maxRepeats: 1 } }));
     const pi = makePi();
